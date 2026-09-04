@@ -114,16 +114,6 @@ class WebsocketClientApp {
     { value: "Custom-Female", label: "Custom clone voice - Female" },
   ];
 
-  private readonly SARVAM_TTS_V2_VOICES = [
-    { value: "anushka", label: "Anushka (Female)" },
-    { value: "manisha", label: "Manisha (Female)" },
-    { value: "vidya", label: "Vidya (Female)" },
-    { value: "arya", label: "Arya (Female)" },
-    { value: "abhilash", label: "Abhilash (Male)" },
-    { value: "karun", label: "Karun (Male)" },
-    { value: "hitesh", label: "Hitesh (Male)" },
-  ];
-
   private readonly SARVAM_TTS_V3_VOICES = [
     { value: "aditya", label: "Aditya" },
     { value: "ritu", label: "Ritu" },
@@ -150,6 +140,51 @@ class WebsocketClientApp {
     { value: "advait", label: "Advait" },
     { value: "amelia", label: "Amelia" },
     { value: "sophia", label: "Sophia" },
+  ];
+
+  // Smallest AI Waves voices, taken from the live catalog at
+  // GET /waves/v1/lightning-v3.1/get_voices. Each voice is recommended for one
+  // language group only, so pick the group matching the call's primary language.
+  private readonly SMALLEST_VOICES = [
+    // Tamil / Telugu / Kannada / Malayalam voices
+    { value: "chandana", label: "Chandana (Female, Kannada accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "shruthi", label: "Shruthi (Female, Kannada accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "nandini", label: "Nandini (Female, Kannada accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "lavanya", label: "Lavanya (Female, Telugu accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "rajan", label: "Rajan (Male - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "shreyas", label: "Shreyas (Male - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "sridhar", label: "Sridhar (Male, Telugu accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "srikanth", label: "Srikanth (Male, Telugu accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "girish", label: "Girish (Male, Kannada accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "prashanth", label: "Prashanth (Male, Kannada accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "harish", label: "Harish (Male - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "arun", label: "Arun (Male - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "venkat", label: "Venkat (Male - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "ashwin", label: "Ashwin (Male - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "surya", label: "Surya (Male - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "mahesh", label: "Mahesh (Male, Telugu accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "teja", label: "Teja (Male, Telugu accent - Tamil/Telugu/Kannada/Malayalam)" },
+    { value: "lokesh", label: "Lokesh (Male, Telugu accent - Tamil/Telugu/Kannada/Malayalam)" },
+    // Hindi voices (Indian accent; handle Hindi-English code-mixing)
+    { value: "srishti", label: "Srishti (Female - Hindi/Hinglish)" },
+    { value: "chinmayi", label: "Chinmayi (Female - Hindi/Hinglish)" },
+    { value: "anuja", label: "Anuja (Female - Hindi/Hinglish)" },
+    { value: "khushi", label: "Khushi (Female - Hindi/Hinglish)" },
+    { value: "lakshya", label: "Lakshya (Male - Hindi/Hinglish)" },
+    { value: "harsh", label: "Harsh (Male - Hindi/Hinglish)" },
+    { value: "kaustubh", label: "Kaustubh (Male - Hindi/Hinglish)" },
+    { value: "sudarshan", label: "Sudarshan (Male - Hindi/Hinglish)" },
+    { value: "virat", label: "Virat (Male - Hindi/Hinglish)" },
+    // English voices
+    { value: "bellatrix", label: "Bellatrix (Female - English, American)" },
+    { value: "avery", label: "Avery (Female - English, American)" },
+    { value: "christine", label: "Christine (Female - English, American)" },
+    { value: "isla", label: "Isla (Female - English, British)" },
+    { value: "chloe", label: "Chloe (Female - English, Australian)" },
+    { value: "malcolm", label: "Malcolm (Male - English, American)" },
+    { value: "ryan", label: "Ryan (Male - English, American)" },
+    { value: "noah", label: "Noah (Male - English, British)" },
+    { value: "alec", label: "Alec (Male - English, Canadian)" },
   ];
 
   constructor() {
@@ -342,10 +377,10 @@ class WebsocketClientApp {
       let voices: { value: string, label: string }[] = [];
       if (model.startsWith("gemini")) {
         voices = this.GEMINI_VOICES;
-      } else if (model === "bulbul:v2") {
-        voices = this.SARVAM_TTS_V2_VOICES;
       } else if (model.startsWith("bulbul")) {
         voices = this.SARVAM_TTS_V3_VOICES;
+      } else if (model.startsWith("lightning")) {
+        voices = this.SMALLEST_VOICES;
       } else {
         voices = this.GOOGLE_VOICES;
       }

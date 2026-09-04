@@ -14,6 +14,7 @@ from pipecat.processors.aggregators.llm_response_universal import LLMContextAggr
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.google.vertex.llm import GoogleVertexLLMService
+from pipecat.services.openai.llm import OpenAILLMService
 
 from pipecat.services.stt_service import STTService
 from pipecat.services.google.stt import GoogleSTTService, language_to_google_stt_language
@@ -42,11 +43,28 @@ SARVAM_STT_MODELS = {
     "saaras:v3",
 }
 
+# bulbul:v2 is intentionally absent: Sarvam deprecated it server-side and the API
+# now rejects it with "Model 'bulbul:v2' has been deprecated. Please use 'bulbul:v3'".
 SARVAM_TTS_MODELS = {
-    "bulbul:v2",
     "bulbul:v3",
     "bulbul:v3-beta",
 }
+
+SMALLEST_STT_MODELS = {
+    "pulse",
+}
+
+SMALLEST_TTS_MODELS = {
+    "lightning-v2",
+    "lightning-v3.1",
+}
+
+SMALLEST_LLM_MODELS = {
+    "electron",
+}
+
+# Smallest's Electron is served over an OpenAI-compatible Chat Completions API.
+SMALLEST_LLM_BASE_URL = "https://api.smallest.ai/waves/v1"
 
 VALID_STT_MODELS = {
     "gemini-3.5-transcribe-live-preview",
@@ -57,14 +75,14 @@ VALID_STT_MODELS = {
     "latest_long",
     "latest_short",
     "telephony",
-} | SARVAM_STT_MODELS
+} | SARVAM_STT_MODELS | SMALLEST_STT_MODELS
 
 VALID_LLM_MODELS = {
     "gemini-3.5-flash-lite",
     "gemini-3.7-flash",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
-}
+} | SMALLEST_LLM_MODELS
 
 VALID_TTS_MODELS = {
     "gemini-3.1-flash-tts-preview",
@@ -72,7 +90,7 @@ VALID_TTS_MODELS = {
     "gemini-2.5-flash-preview-tts",
     "gemini-2.5-pro-preview-tts",
     "google-tts",
-} | SARVAM_TTS_MODELS
+} | SARVAM_TTS_MODELS | SMALLEST_TTS_MODELS
 
 
 def validate_stt_model(stt_model: Optional[str]) -> str:
@@ -526,18 +544,11 @@ class CustomGoogleTTSService(GoogleTTSService):
                     }
                 }))
 
-class CustomGoogleVertexLLMService(GoogleVertexLLMService):
-    def _maybe_unset_thinking_budget(self, generation_params: dict):
-        try:
-            model = self._settings.model or ""
-            if "thinking_config" in generation_params:
-                return
-            if "gemini-3.7" in model or "gemini-2.5" in model:
-                generation_params["thinking_config"] = {"thinking_budget": 0}
-            elif "gemini-3.5-flash-lite" in model or "gemini-3.1" in model or "gemini-3-flash" in model:
-                generation_params["thinking_config"] = {"thinking_level": "minimal"}
-        except Exception as e:
-            logger.error(f"Failed to unset thinking budget: {e}")
+class LLMMetricsBroadcastMixin:
+    """Broadcasts LLM latency and token usage to the observability panel.
+
+    Provider-agnostic, so every LLM backend reports the same metrics to the UI.
+    """
 
     async def start_ttfb_metrics(self):
         if not getattr(self, '_my_ttfb_start', None):
@@ -586,6 +597,25 @@ class CustomGoogleVertexLLMService(GoogleVertexLLMService):
                 }
             }
         }))
+
+
+class CustomGoogleVertexLLMService(LLMMetricsBroadcastMixin, GoogleVertexLLMService):
+    def _maybe_unset_thinking_budget(self, generation_params: dict):
+        try:
+            model = self._settings.model or ""
+            if "thinking_config" in generation_params:
+                return
+            if "gemini-3.7" in model or "gemini-2.5" in model:
+                generation_params["thinking_config"] = {"thinking_budget": 0}
+            elif "gemini-3.5-flash-lite" in model or "gemini-3.1" in model or "gemini-3-flash" in model:
+                generation_params["thinking_config"] = {"thinking_level": "minimal"}
+        except Exception as e:
+            logger.error(f"Failed to unset thinking budget: {e}")
+
+
+class CustomSmallestLLMService(LLMMetricsBroadcastMixin, OpenAILLMService):
+    """Smallest AI Electron LLM, served over an OpenAI-compatible endpoint."""
+    pass
 
 
 class TranscriptionBroadcaster(FrameProcessor):
@@ -735,6 +765,30 @@ async def run_agent(
                 ),
                 sample_rate=16000,
             )
+        elif clean_stt_model in SMALLEST_STT_MODELS:
+            smallest_api_key = os.getenv("SMALLEST_API_KEY")
+            if not smallest_api_key:
+                raise ValueError("SMALLEST_API_KEY environment variable not set")
+
+            from pipecat.services.smallest.stt import SmallestSTTService
+
+            # Pulse takes one language code, or a regional aggregator that auto-detects
+            # within a language group. With several languages selected we hand it
+            # "multi-south-indic" so the prompt can switch languages mid-call; the
+            # aggregator is passed through as a raw string (pipecat has no enum for it).
+            if len(stt_languages) == 1:
+                smallest_stt_language = stt_languages[0]
+            else:
+                smallest_stt_language = "multi-south-indic"
+
+            stt = SmallestSTTService(
+                api_key=smallest_api_key,
+                settings=SmallestSTTService.Settings(
+                    model="pulse",
+                    language=smallest_stt_language,
+                ),
+                sample_rate=16000,
+            )
         else:
             # chirp_3 is hosted in US multi-region ("us"), while chirp_2 is in us-central1
             stt_loc = "us-central1" if ("chirp_2" in clean_stt_model) else "us"
@@ -755,26 +809,46 @@ async def run_agent(
     if skip_stt:
         final_system_instruction += "\n\nIMPORTANT: The user's input is raw audio. Listen to it and respond naturally. Strictly answer ONLY the current current user query. Do not bring up previous topics or simulate future turns."
 
-    llm_location = "global" if any(k in clean_llm_model for k in ["gemini-3", "3.7", "3.5"]) else location
-    
-    thinking_config = None
-    if "gemini-3.7" in clean_llm_model:
-        thinking_config = GoogleLLMService.ThinkingConfig(thinking_budget=0)
-    elif any(k in clean_llm_model for k in ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3-flash"]):
-        thinking_config = GoogleLLMService.ThinkingConfig(thinking_level="minimal")
-    elif any(k in clean_llm_model for k in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]):
-        thinking_config = GoogleLLMService.ThinkingConfig(thinking_budget=0)
+    if clean_llm_model in SMALLEST_LLM_MODELS:
+        smallest_api_key = os.getenv("SMALLEST_API_KEY")
+        if not smallest_api_key:
+            raise ValueError("SMALLEST_API_KEY environment variable not set")
+        if skip_stt:
+            raise ValueError(
+                "Skip STT sends raw audio to the LLM, which Electron does not accept. "
+                "Turn off Skip STT to use Electron, or pick a Gemini LLM."
+            )
 
-    llm = CustomGoogleVertexLLMService(
-        project_id=project_id,
-        location=llm_location,
-        settings=GoogleVertexLLMService.Settings(
-            model=clean_llm_model,
-            system_instruction=final_system_instruction,
-            max_tokens=1024 if thinking_config else 4096,
-            thinking=thinking_config
+        llm = CustomSmallestLLMService(
+            api_key=smallest_api_key,
+            base_url=SMALLEST_LLM_BASE_URL,
+            settings=OpenAILLMService.Settings(
+                model=clean_llm_model,
+                system_instruction=final_system_instruction,
+                max_tokens=4096,
+            )
         )
-    )
+    else:
+        llm_location = "global" if any(k in clean_llm_model for k in ["gemini-3", "3.7", "3.5"]) else location
+
+        thinking_config = None
+        if "gemini-3.7" in clean_llm_model:
+            thinking_config = GoogleLLMService.ThinkingConfig(thinking_budget=0)
+        elif any(k in clean_llm_model for k in ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3-flash"]):
+            thinking_config = GoogleLLMService.ThinkingConfig(thinking_level="minimal")
+        elif any(k in clean_llm_model for k in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]):
+            thinking_config = GoogleLLMService.ThinkingConfig(thinking_budget=0)
+
+        llm = CustomGoogleVertexLLMService(
+            project_id=project_id,
+            location=llm_location,
+            settings=GoogleVertexLLMService.Settings(
+                model=clean_llm_model,
+                system_instruction=final_system_instruction,
+                max_tokens=1024 if thinking_config else 4096,
+                thinking=thinking_config
+            )
+        )
 
     sarvam_tts_session: Optional[aiohttp.ClientSession] = None
     if clean_tts_model.startswith("gemini"):
@@ -819,6 +893,26 @@ async def run_agent(
                 voice=tts_voice,
                 language=Language(tts_lang),
                 pace=tts_pace,
+            ),
+            text_filters=[MarkdownTextFilter()],
+        )
+    elif clean_tts_model in SMALLEST_TTS_MODELS:
+        smallest_api_key = os.getenv("SMALLEST_API_KEY")
+        if not smallest_api_key:
+            raise ValueError("SMALLEST_API_KEY environment variable not set")
+
+        from pipecat.services.smallest.tts import SmallestTTSService
+
+        # "auto" is Smallest's cross-language mode: it detects the language of each
+        # chunk of text and code-switches, which is what the multilingual prompt needs.
+        # Pipecat has no Language enum for it, so it goes through as a raw string.
+        tts = SmallestTTSService(
+            api_key=smallest_api_key,
+            settings=SmallestTTSService.Settings(
+                model=clean_tts_model,
+                voice=tts_voice,
+                language="auto",
+                speed=tts_pace,
             ),
             text_filters=[MarkdownTextFilter()],
         )
