@@ -15,6 +15,7 @@ from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.google.vertex.llm import GoogleVertexLLMService
 from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.smallest.tts import SmallestTTSService
 
 from pipecat.services.stt_service import STTService
 from pipecat.services.google.stt import GoogleSTTService, language_to_google_stt_language
@@ -54,10 +55,18 @@ SMALLEST_STT_MODELS = {
     "pulse",
 }
 
+# Model ids as the live API spells them. lightning-v2 is intentionally absent: the
+# current streaming endpoint only accepts lightning_v3.1, lightning_v3.1_pro and
+# lightning_v3.1_pro_07_26, and rejects anything else as an invalid enum value.
 SMALLEST_TTS_MODELS = {
-    "lightning-v2",
-    "lightning-v3.1",
+    "lightning_v3.1",
+    "lightning_v3.1_pro",
 }
+
+# Pulse routes these four through one shared South-Indic model that detects between
+# them, so any one of the codes transcribes all four. The Hindi model separately
+# handles Hindi plus English/Hinglish. No single mode covers both groups.
+SMALLEST_SOUTH_INDIC_CODES = {"ta", "te", "kn", "ml"}
 
 SMALLEST_LLM_MODELS = {
     "electron",
@@ -618,6 +627,25 @@ class CustomSmallestLLMService(LLMMetricsBroadcastMixin, OpenAILLMService):
     pass
 
 
+class CustomSmallestTTSService(SmallestTTSService):
+    """Smallest Waves TTS pointed at the current streaming endpoint.
+
+    pipecat 1.2.1 connects to /waves/v1/<model>/get_speech/stream, which Smallest has
+    retired - the server rejects the handshake with HTTP 410. The live endpoint is
+    /waves/v1/tts/live, and it takes the model in the JSON payload rather than in the
+    URL. Everything else (the chunk/complete/error message shape) is unchanged, so
+    only the URL and that one payload field need overriding.
+    """
+
+    def _build_websocket_url(self) -> str:
+        return f"{self._base_url}/waves/v1/tts/live"
+
+    def _build_msg(self, text: str) -> dict:
+        msg = super()._build_msg(text)
+        msg["model"] = self._settings.model
+        return msg
+
+
 class TranscriptionBroadcaster(FrameProcessor):
     def __init__(self, participant: str):
         super().__init__()
@@ -772,14 +800,20 @@ async def run_agent(
 
             from pipecat.services.smallest.stt import SmallestSTTService
 
-            # Pulse takes one language code, or a regional aggregator that auto-detects
-            # within a language group. With several languages selected we hand it
-            # "multi-south-indic" so the prompt can switch languages mid-call; the
-            # aggregator is passed through as a raw string (pipecat has no enum for it).
+            # Pulse takes a single language code. Its Hindi model also transcribes
+            # English (and Hinglish) correctly, and its South-Indic model detects
+            # between Tamil/Telugu/Kannada/Malayalam, so one code per group is enough.
+            # The documented "multi-south-indic" aggregator is deliberately not used:
+            # it returns Latin-transliterated gibberish for every one of these
+            # languages, including the South Indian ones it is meant to cover.
             if len(stt_languages) == 1:
                 smallest_stt_language = stt_languages[0]
             else:
-                smallest_stt_language = "multi-south-indic"
+                base_codes = {str(l.value).split("-")[0].lower() for l in stt_languages}
+                if base_codes and base_codes <= SMALLEST_SOUTH_INDIC_CODES:
+                    smallest_stt_language = Language.TA
+                else:
+                    smallest_stt_language = Language.HI
 
             stt = SmallestSTTService(
                 api_key=smallest_api_key,
@@ -901,14 +935,12 @@ async def run_agent(
         if not smallest_api_key:
             raise ValueError("SMALLEST_API_KEY environment variable not set")
 
-        from pipecat.services.smallest.tts import SmallestTTSService
-
         # "auto" is Smallest's cross-language mode: it detects the language of each
         # chunk of text and code-switches, which is what the multilingual prompt needs.
         # Pipecat has no Language enum for it, so it goes through as a raw string.
-        tts = SmallestTTSService(
+        tts = CustomSmallestTTSService(
             api_key=smallest_api_key,
-            settings=SmallestTTSService.Settings(
+            settings=CustomSmallestTTSService.Settings(
                 model=clean_tts_model,
                 voice=tts_voice,
                 language="auto",

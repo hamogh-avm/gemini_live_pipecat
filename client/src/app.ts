@@ -187,6 +187,50 @@ class WebsocketClientApp {
     { value: "alec", label: "Alec (Male - English, Canadian)" },
   ];
 
+  // lightning_v3.1_pro has its own catalog (GET /waves/v1/lightning-v3.1-pro/get_voices)
+  // and rejects base-model voice ids. Unlike the base model, Pro has voices trained
+  // per individual language rather than one shared South-Indic set.
+  private readonly SMALLEST_PRO_VOICES = [
+    // Tamil
+    { value: "tamilselvi", label: "Tamilselvi (Female - Tamil)" },
+    { value: "malar", label: "Malar (Female - Tamil)" },
+    { value: "mathan", label: "Mathan (Male - Tamil)" },
+    { value: "tamizh", label: "Tamizh (Male - Tamil)" },
+    { value: "barath", label: "Barath (Male - Tamil)" },
+    // Telugu
+    { value: "sravani", label: "Sravani (Female - Telugu)" },
+    { value: "swathi", label: "Swathi (Female - Telugu)" },
+    { value: "naveen", label: "Naveen (Male - Telugu)" },
+    { value: "charan", label: "Charan (Male - Telugu)" },
+    { value: "sasank", label: "Sasank (Male - Telugu)" },
+    // Kannada
+    { value: "spoorthi", label: "Spoorthi (Female - Kannada)" },
+    { value: "sahana", label: "Sahana (Female - Kannada)" },
+    { value: "kishore", label: "Kishore (Male - Kannada)" },
+    { value: "rakshith", label: "Rakshith (Male - Kannada)" },
+    { value: "yogesh", label: "Yogesh (Male - Kannada)" },
+    // Malayalam
+    { value: "parvathy", label: "Parvathy (Female - Malayalam)" },
+    { value: "lakshmi", label: "Lakshmi (Female - Malayalam)" },
+    { value: "vishnu", label: "Vishnu (Male - Malayalam)" },
+    { value: "aravindan", label: "Aravindan (Male - Malayalam)" },
+    { value: "unni", label: "Unni (Male - Malayalam)" },
+    // Hindi
+    { value: "mrunal", label: "Mrunal (Female - Hindi)" },
+    { value: "zariya", label: "Zariya (Female - Hindi)" },
+    { value: "mishka", label: "Mishka (Female - Hindi)" },
+    { value: "vyom", label: "Vyom (Male - Hindi)" },
+    { value: "reyansh", label: "Reyansh (Male - Hindi)" },
+    { value: "zoravar", label: "Zoravar (Male - Hindi)" },
+    // English
+    { value: "tabitha", label: "Tabitha (Female - English)" },
+    { value: "chelsea", label: "Chelsea (Female - English)" },
+    { value: "kelsey", label: "Kelsey (Female - English)" },
+    { value: "nolan", label: "Nolan (Male - English)" },
+    { value: "spencer", label: "Spencer (Male - English)" },
+    { value: "callum", label: "Callum (Male - English)" },
+  ];
+
   constructor() {
     this.setupDOMElements();
     this.setupEventListeners();
@@ -379,6 +423,8 @@ class WebsocketClientApp {
         voices = this.GEMINI_VOICES;
       } else if (model.startsWith("bulbul")) {
         voices = this.SARVAM_TTS_V3_VOICES;
+      } else if (model.endsWith("_pro")) {
+        voices = this.SMALLEST_PRO_VOICES;
       } else if (model.startsWith("lightning")) {
         voices = this.SMALLEST_VOICES;
       } else {
