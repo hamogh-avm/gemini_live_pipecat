@@ -3,6 +3,7 @@ import time
 import asyncio
 from typing import Optional, List
 import re
+import aiohttp
 from loguru import logger
 
 from pipecat.pipeline.pipeline import Pipeline
@@ -36,6 +37,17 @@ from google.genai import types
 
 from system_prompt import SYSTEM_PROMPT, tts_prompt, GEMINI_LLM_TTS_PROMPT
 
+SARVAM_STT_MODELS = {
+    "saarika:v2.5",
+    "saaras:v3",
+}
+
+SARVAM_TTS_MODELS = {
+    "bulbul:v2",
+    "bulbul:v3",
+    "bulbul:v3-beta",
+}
+
 VALID_STT_MODELS = {
     "gemini-3.5-transcribe-live-preview",
     "gemini-3.5-transcribe-live-aistudio",
@@ -45,7 +57,7 @@ VALID_STT_MODELS = {
     "latest_long",
     "latest_short",
     "telephony",
-}
+} | SARVAM_STT_MODELS
 
 VALID_LLM_MODELS = {
     "gemini-3.5-flash-lite",
@@ -60,7 +72,7 @@ VALID_TTS_MODELS = {
     "gemini-2.5-flash-preview-tts",
     "gemini-2.5-pro-preview-tts",
     "google-tts",
-}
+} | SARVAM_TTS_MODELS
 
 
 def validate_stt_model(stt_model: Optional[str]) -> str:
@@ -704,6 +716,25 @@ async def run_agent(
                 languages=stt_languages,
                 is_ai_studio=is_ai_studio,
             )
+        elif clean_stt_model in SARVAM_STT_MODELS:
+            sarvam_api_key = os.getenv("SARVAM_API_KEY")
+            if not sarvam_api_key:
+                raise ValueError("SARVAM_API_KEY environment variable not set")
+
+            from pipecat.services.sarvam.stt import SarvamSTTService
+
+            # Sarvam auto-detects the spoken language when none is set, which is what
+            # lets the multilingual prompt switch languages mid-call. Only pin a single
+            # language if the caller explicitly narrowed the selection to just one.
+            sarvam_stt_language = stt_languages[0] if len(stt_languages) == 1 else None
+            stt = SarvamSTTService(
+                api_key=sarvam_api_key,
+                settings=SarvamSTTService.Settings(
+                    model=clean_stt_model,
+                    language=sarvam_stt_language,
+                ),
+                sample_rate=16000,
+            )
         else:
             # chirp_3 is hosted in US multi-region ("us"), while chirp_2 is in us-central1
             stt_loc = "us-central1" if ("chirp_2" in clean_stt_model) else "us"
@@ -745,10 +776,11 @@ async def run_agent(
         )
     )
 
+    sarvam_tts_session: Optional[aiohttp.ClientSession] = None
     if clean_tts_model.startswith("gemini"):
         # Use Gemini TTS (Vertex AI) requires 24kHz
         tts_location = "global" if "gemini-3" in clean_tts_model else location
-        
+
         tts_lang = "hi-IN"
         if stt_language:
             langs = [l.strip() for l in stt_language.split(",")]
@@ -760,10 +792,35 @@ async def run_agent(
             location=tts_location,
             voice_id=tts_voice,
             model=clean_tts_model, # Use the sanitized model
-            sample_rate=24000, 
+            sample_rate=24000,
             voice_prompt=tts_voice_prompt,
             language_code=tts_lang,
             text_filters=[MarkdownTextFilter()]
+        )
+    elif clean_tts_model in SARVAM_TTS_MODELS:
+        tts_lang = "hi-IN"
+        if stt_language:
+            langs = [l.strip() for l in stt_language.split(",")]
+            hi_lang = next((l for l in langs if "hi" in l.lower()), None)
+            tts_lang = hi_lang if hi_lang else langs[0]
+
+        sarvam_api_key = os.getenv("SARVAM_API_KEY")
+        if not sarvam_api_key:
+            raise ValueError("SARVAM_API_KEY environment variable not set")
+
+        from pipecat.services.sarvam.tts import SarvamHttpTTSService
+
+        sarvam_tts_session = aiohttp.ClientSession()
+        tts = SarvamHttpTTSService(
+            api_key=sarvam_api_key,
+            aiohttp_session=sarvam_tts_session,
+            settings=SarvamHttpTTSService.Settings(
+                model=clean_tts_model,
+                voice=tts_voice,
+                language=Language(tts_lang),
+                pace=tts_pace,
+            ),
+            text_filters=[MarkdownTextFilter()],
         )
     elif tts_voice in ["Custom-Male", "Custom-Female"]:
         # For cloned voices, use en-US as the base language code
@@ -881,4 +938,8 @@ async def run_agent(
         # Defer greeting until start_trigger message is received when user clicks Start Listening
 
     runner = PipelineRunner(handle_sigint=False)
-    await runner.run(task)
+    try:
+        await runner.run(task)
+    finally:
+        if sarvam_tts_session is not None:
+            await sarvam_tts_session.close()

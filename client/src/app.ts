@@ -114,6 +114,44 @@ class WebsocketClientApp {
     { value: "Custom-Female", label: "Custom clone voice - Female" },
   ];
 
+  private readonly SARVAM_TTS_V2_VOICES = [
+    { value: "anushka", label: "Anushka (Female)" },
+    { value: "manisha", label: "Manisha (Female)" },
+    { value: "vidya", label: "Vidya (Female)" },
+    { value: "arya", label: "Arya (Female)" },
+    { value: "abhilash", label: "Abhilash (Male)" },
+    { value: "karun", label: "Karun (Male)" },
+    { value: "hitesh", label: "Hitesh (Male)" },
+  ];
+
+  private readonly SARVAM_TTS_V3_VOICES = [
+    { value: "aditya", label: "Aditya" },
+    { value: "ritu", label: "Ritu" },
+    { value: "priya", label: "Priya" },
+    { value: "neha", label: "Neha" },
+    { value: "rahul", label: "Rahul" },
+    { value: "pooja", label: "Pooja" },
+    { value: "rohan", label: "Rohan" },
+    { value: "simran", label: "Simran" },
+    { value: "kavya", label: "Kavya" },
+    { value: "amit", label: "Amit" },
+    { value: "dev", label: "Dev" },
+    { value: "ishita", label: "Ishita" },
+    { value: "shreya", label: "Shreya" },
+    { value: "ratan", label: "Ratan" },
+    { value: "varun", label: "Varun" },
+    { value: "manan", label: "Manan" },
+    { value: "sumit", label: "Sumit" },
+    { value: "roopa", label: "Roopa" },
+    { value: "kabir", label: "Kabir" },
+    { value: "aayan", label: "Aayan" },
+    { value: "shubh", label: "Shubh" },
+    { value: "ashutosh", label: "Ashutosh" },
+    { value: "advait", label: "Advait" },
+    { value: "amelia", label: "Amelia" },
+    { value: "sophia", label: "Sophia" },
+  ];
+
   constructor() {
     this.setupDOMElements();
     this.setupEventListeners();
@@ -304,6 +342,10 @@ class WebsocketClientApp {
       let voices: { value: string, label: string }[] = [];
       if (model.startsWith("gemini")) {
         voices = this.GEMINI_VOICES;
+      } else if (model === "bulbul:v2") {
+        voices = this.SARVAM_TTS_V2_VOICES;
+      } else if (model.startsWith("bulbul")) {
+        voices = this.SARVAM_TTS_V3_VOICES;
       } else {
         voices = this.GOOGLE_VOICES;
       }
