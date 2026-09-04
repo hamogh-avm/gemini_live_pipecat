@@ -330,6 +330,9 @@ class WebsocketClientApp {
     try {
       const response = await fetch(`${getApiBaseUrl()}/connect/system-prompt`);
       const data = await response.json();
+      const prompts: { id: string; label: string; prompt: string }[] =
+        data.prompts || [];
+
       const geminiSystemInstructionsTextarea = document.getElementById(
         "system-instructions-textarea"
       ) as HTMLTextAreaElement;
@@ -343,9 +346,45 @@ class WebsocketClientApp {
       if (ttsLlmSttSystemInstructionsTextarea) {
         ttsLlmSttSystemInstructionsTextarea.value = data.system_prompt;
       }
+
+      this.populatePromptTemplateSelect(
+        "system-prompt-template-select",
+        geminiSystemInstructionsTextarea,
+        prompts
+      );
+      this.populatePromptTemplateSelect(
+        "tts-llm-stt-system-prompt-template-select",
+        ttsLlmSttSystemInstructionsTextarea,
+        prompts
+      );
     } catch (error) {
       this.log(`Error loading system prompt: ${error}`, "error");
     }
+  }
+
+  private populatePromptTemplateSelect(
+    selectId: string,
+    textarea: HTMLTextAreaElement | null,
+    prompts: { id: string; label: string; prompt: string }[]
+  ): void {
+    const select = document.getElementById(selectId) as HTMLSelectElement | null;
+    if (!select || !textarea || prompts.length === 0) return;
+
+    select.innerHTML = "";
+    for (const template of prompts) {
+      const option = document.createElement("option");
+      option.value = template.id;
+      option.textContent = template.label;
+      select.appendChild(option);
+    }
+    select.value = prompts[0].id;
+
+    select.addEventListener("change", () => {
+      const chosen = prompts.find((p) => p.id === select.value);
+      if (chosen) {
+        textarea.value = chosen.prompt;
+      }
+    });
   }
 
   private switchTab(tab: HTMLButtonElement): void {
@@ -1013,9 +1052,10 @@ class WebsocketClientApp {
         systemInstructions = geminiSystemInstructionsTextarea?.value || "";
       }
 
-      // Only append system_instruction to URL if explicitly customized and brief (< 500 chars)
-      // Default system prompt is automatically loaded server-side to prevent HTTP 400 (URL query line too long)
-      if (systemInstructions && systemInstructions.length < 500) {
+      // Only append system_instruction to URL if explicitly customized and brief (< 1500 chars,
+      // matching the server-side cap in /connect). Default system prompt is automatically
+      // loaded server-side to prevent HTTP 400 (URL query line too long).
+      if (systemInstructions && systemInstructions.length < 1500) {
         connectUrl += `&system_instruction=${encodeURIComponent(
           systemInstructions
         )}`;
