@@ -29,6 +29,18 @@ LOAN_AGENT_MULTILINGUAL_PROMPT = """You are a professional, empathetic female vo
 
 Now, greet the user warmly."""
 
+# Appended to whichever prompt is active when the LLM is Smallest's Electron.
+# Electron is a small language model and answers tersely by default, which on a
+# lending call reads as unhelpful - the caller gets a number with no context.
+# This asks for the same substance the larger models give unprompted, so a
+# model comparison is measuring capability rather than verbosity defaults.
+SMALLEST_DETAIL_PROMPT = """**Answer fully:**
+Give the caller a complete answer, not a minimal one. Aim for two to four short spoken sentences per turn.
+* State the answer, then the one detail that makes it useful - the reason behind it, the trade-off, or the condition attached.
+* Whenever you give a rate, fee, or timeline, say what it depends on and that a specialist confirms the exact figure.
+* After answering, continue the conversation with the natural next question instead of stopping dead.
+Stay conversational and never read a list aloud. Do not pad, repeat yourself, or invent detail to fill space - if you do not have the fact, say a specialist will confirm it."""
+
 # Selectable prompt library, exposed to the client via GET /connect/system-prompt.
 # The first entry is the active default (SYSTEM_PROMPT below).
 PROMPT_TEMPLATES = [
