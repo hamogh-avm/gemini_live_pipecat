@@ -41,7 +41,7 @@ from fastapi import WebSocket
 from google import genai
 from google.genai import types
 
-from system_prompt import SYSTEM_PROMPT, tts_prompt, GEMINI_LLM_TTS_PROMPT
+from system_prompt import SYSTEM_PROMPT, tts_prompt, GEMINI_LLM_TTS_PROMPT, SMALLEST_DETAIL_PROMPT
 
 SARVAM_STT_MODELS = {
     "saarika:v2.5",
@@ -965,6 +965,14 @@ async def run_agent(
     if skip_stt:
         final_system_instruction += "\n\nIMPORTANT: The user's input is raw audio. Listen to it and respond naturally. Strictly answer ONLY the current current user query. Do not bring up previous topics or simulate future turns."
 
+    # Electron answers tersely by default. Ask it for the detail the larger
+    # models give unprompted, and record that we did - a model comparison run
+    # against a different prompt needs to say so.
+    detail_prompt_applied = clean_llm_model in SMALLEST_LLM_MODELS
+    if detail_prompt_applied:
+        final_system_instruction += "\n\n" + SMALLEST_DETAIL_PROMPT
+        logger.info(f"[Prompt] Appended detail instructions for {clean_llm_model}")
+
     if clean_llm_model in SMALLEST_LLM_MODELS:
         smallest_api_key = os.getenv("SMALLEST_API_KEY")
         if not smallest_api_key:
@@ -1208,6 +1216,7 @@ async def run_agent(
                     'llm': clean_llm_model,
                     'tts': clean_tts_model,
                     'voice': tts_voice,
+                    'prompt_variant': 'detail' if detail_prompt_applied else 'base',
                 }
             }
         }))

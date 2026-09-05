@@ -60,7 +60,7 @@ class WebsocketClientApp {
   private ttsSamples: number[] = [];
   // Tokens attributed to turn 1, turn 2, ... turn n.
   private perTurnTokens: { turn: number; prompt: number; completion: number; total: number }[] = [];
-  private sessionConfig: { pipeline?: string; stt?: string; llm?: string; tts?: string; voice?: string } | null = null;
+  private sessionConfig: { pipeline?: string; stt?: string; llm?: string; tts?: string; voice?: string; prompt_variant?: string } | null = null;
   private lastLLMLatency: number | null = null;
   private lastTTSLatency: number | null = null;
   private lastTurnSTTLatency: number | null = null;
@@ -658,8 +658,11 @@ class WebsocketClientApp {
       const cfgEl = document.getElementById("eval-config-label");
       if (cfgEl) {
           const c = this.sessionConfig;
+          // Flag a run whose prompt was modified for the model, so these
+          // numbers aren't later compared as if every stack got the same input.
+          const variant = c?.prompt_variant === "detail" ? " · prompt: +detail" : "";
           cfgEl.textContent = c
-              ? `STT: ${c.stt} · LLM: ${c.llm} · TTS: ${c.tts}${c.voice ? ` (${c.voice})` : ""}`
+              ? `STT: ${c.stt} · LLM: ${c.llm} · TTS: ${c.tts}${c.voice ? ` (${c.voice})` : ""}${variant}`
               : "Connect to start measuring";
       }
 
