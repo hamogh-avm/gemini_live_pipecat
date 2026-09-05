@@ -669,16 +669,27 @@ class WebsocketClientApp {
           if (!this.perTurnTokens.length) {
               body.innerHTML = `<tr><td colspan="4" style="opacity:0.6;padding:8px;">No turns recorded yet</td></tr>`;
           } else {
-              // Turns 1 and 2 are the ones worth comparing across models - they
-              // carry the system prompt and the first real exchange. From turn 3
-              // the split stops being interesting, so show the combined figure.
-              body.innerHTML = this.perTurnTokens
-                  .map((t) =>
-                      t.turn <= 2
-                          ? `<tr><td>Turn ${t.turn}</td><td>${t.prompt.toLocaleString()}</td><td>${t.completion.toLocaleString()}</td><td><strong>${t.total.toLocaleString()}</strong></td></tr>`
-                          : `<tr><td>Turn ${t.turn}</td><td colspan="2" class="per-turn-combined">combined</td><td><strong>${t.total.toLocaleString()}</strong></td></tr>`
-                  )
-                  .join("");
+              // Turns 1 and 2 get their own rows - they carry the system prompt
+              // and the first real exchange, which is what differs between
+              // models. Everything from turn 3 collapses into one combined row.
+              const row = (label: string, prompt: number, completion: number, total: number, cls = "") =>
+                  `<tr${cls}><td>${label}</td><td>${prompt.toLocaleString()}</td><td>${completion.toLocaleString()}</td><td><strong>${total.toLocaleString()}</strong></td></tr>`;
+
+              const head = this.perTurnTokens.filter((t) => t.turn <= 2);
+              const rest = this.perTurnTokens.filter((t) => t.turn > 2);
+
+              let html = head.map((t) => row(`Turn ${t.turn}`, t.prompt, t.completion, t.total)).join("");
+
+              if (rest.length) {
+                  const sum = (k: "prompt" | "completion" | "total") =>
+                      rest.reduce((a, t) => a + t[k], 0);
+                  const first = rest[0].turn;
+                  const last = rest[rest.length - 1].turn;
+                  const label = first === last ? `Turn ${first}` : `Turn ${first} - Turn ${last}`;
+                  html += row(label, sum("prompt"), sum("completion"), sum("total"), ` class="per-turn-combined"`);
+              }
+
+              body.innerHTML = html;
           }
       }
   }

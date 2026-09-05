@@ -822,11 +822,10 @@ input[type="password"]::placeholder {
   border-bottom: none;
 }
 
-/* Turns 3+ collapse the prompt/response split into a single combined total. */
-.per-turn-combined {
-  opacity: 0.45;
-  font-style: italic;
-  font-size: 0.75rem;
+/* Turns 3+ collapse into one row totalling the whole range. */
+.per-turn-combined td {
+  border-top: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 /* Tool Editor */
