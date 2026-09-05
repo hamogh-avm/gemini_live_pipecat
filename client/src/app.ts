@@ -52,6 +52,15 @@ class WebsocketClientApp {
   private interruptCount = 0;
   private toolCallCount = 0;
   private tokenCount = 0;
+
+  // Per-model evaluation state: every latency sample for the session, so the
+  // cards can show a conversation-wide average per stage rather than the last value.
+  private sttSamples: number[] = [];
+  private llmSamples: number[] = [];
+  private ttsSamples: number[] = [];
+  // Tokens attributed to turn 1, turn 2, ... turn n.
+  private perTurnTokens: { turn: number; prompt: number; completion: number; total: number }[] = [];
+  private sessionConfig: { pipeline?: string; stt?: string; llm?: string; tts?: string; voice?: string } | null = null;
   private lastLLMLatency: number | null = null;
   private lastTTSLatency: number | null = null;
   private lastTurnSTTLatency: number | null = null;
@@ -607,6 +616,10 @@ class WebsocketClientApp {
       this.pendingSTTLatency = null;
       this.lastTurnUsage = null;
       this.lastPromptTokenCount = 0;
+      this.sttSamples = [];
+      this.llmSamples = [];
+      this.ttsSamples = [];
+      this.perTurnTokens = [];
       this.updateMetricDisplay();
       if (this.chatWindow) this.chatWindow.innerHTML = "";
   }
@@ -616,6 +629,54 @@ class WebsocketClientApp {
       if (this.metricInterruptCount) this.metricInterruptCount.textContent = this.interruptCount.toString();
       if (this.metricToolCallCount) this.metricToolCallCount.textContent = this.toolCallCount.toString();
       if (this.metricTokenCount) this.metricTokenCount.textContent = this.tokenCount.toString();
+      this.updateEvaluationCards();
+  }
+
+  /** Mean of the samples, in ms. Latency payloads are in seconds. */
+  private avgMs(samples: number[]): string {
+      if (!samples.length) return "—";
+      const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+      return `${Math.round(mean * 1000)} ms`;
+  }
+
+  private updateEvaluationCards() {
+      const set = (id: string, value: string, sub?: string) => {
+          const el = document.getElementById(id);
+          if (el) el.textContent = value;
+          if (sub !== undefined) {
+              const subEl = document.getElementById(`${id}-sub`);
+              if (subEl) subEl.textContent = sub;
+          }
+      };
+
+      const n = (arr: number[]) => (arr.length ? `${arr.length} turn${arr.length === 1 ? "" : "s"}` : "no data");
+      set("metric-avg-stt", this.avgMs(this.sttSamples), n(this.sttSamples));
+      set("metric-avg-llm", this.avgMs(this.llmSamples), n(this.llmSamples));
+      set("metric-avg-tts", this.avgMs(this.ttsSamples), n(this.ttsSamples));
+
+      // Which stack produced these numbers
+      const cfgEl = document.getElementById("eval-config-label");
+      if (cfgEl) {
+          const c = this.sessionConfig;
+          cfgEl.textContent = c
+              ? `STT: ${c.stt} · LLM: ${c.llm} · TTS: ${c.tts}${c.voice ? ` (${c.voice})` : ""}`
+              : "Connect to start measuring";
+      }
+
+      // Per-turn token table
+      const body = document.getElementById("per-turn-tokens-body");
+      if (body) {
+          if (!this.perTurnTokens.length) {
+              body.innerHTML = `<tr><td colspan="4" style="opacity:0.6;padding:8px;">No turns recorded yet</td></tr>`;
+          } else {
+              body.innerHTML = this.perTurnTokens
+                  .map(
+                      (t) =>
+                          `<tr><td>Turn ${t.turn}</td><td>${t.prompt.toLocaleString()}</td><td>${t.completion.toLocaleString()}</td><td><strong>${t.total.toLocaleString()}</strong></td></tr>`
+                  )
+                  .join("");
+          }
+      }
   }
 
   private updateBubbleLatencyDisplay(bubble: HTMLElement, updates?: { llmLatency?: number; ttsLatency?: number; sttLatency?: number; usage?: any }) {
@@ -829,6 +890,12 @@ class WebsocketClientApp {
           this.replaceChatMessage(role, text);
       }
 
+      // Which model stack these numbers belong to (labels the evaluation cards)
+      if (message.type === "session_config") {
+          this.sessionConfig = message.config || null;
+          this.updateMetricDisplay();
+      }
+
       // Handle LangSmith Trace URL
       if (message.type === "trace_url") {
           const url = message.url;
@@ -872,6 +939,15 @@ class WebsocketClientApp {
                       if (payload.usage.total_token_count) {
                           this.tokenCount += payload.usage.total_token_count;
                       }
+                      // Attribute this usage report to the turn it belongs to.
+                      // Turn N's report arrives before turn N's turn_complete, so
+                      // the in-flight turn is turnCount + 1.
+                      this.perTurnTokens.push({
+                          turn: this.turnCount + 1,
+                          prompt: payload.usage.prompt_token_count || 0,
+                          completion: payload.usage.response_token_count || payload.usage.completion_token_count || 0,
+                          total: payload.usage.total_token_count || 0,
+                      });
                       if (lastChild && lastChild.classList.contains("bot")) {
                           this.updateBubbleLatencyDisplay(lastChild, { usage: payload.usage });
                       } else {
@@ -884,6 +960,7 @@ class WebsocketClientApp {
                   }
                   break;
               case "llm_latency":
+                  this.llmSamples.push(payload.value);
                   if (lastChild && lastChild.classList.contains("bot")) {
                       this.updateBubbleLatencyDisplay(lastChild, { llmLatency: payload.value });
                   } else {
@@ -891,6 +968,7 @@ class WebsocketClientApp {
                   }
                   break;
               case "tts_latency":
+                  this.ttsSamples.push(payload.value);
                   if (lastChild && lastChild.classList.contains("bot")) {
                       this.updateBubbleLatencyDisplay(lastChild, { ttsLatency: payload.value });
                   } else {
@@ -898,6 +976,7 @@ class WebsocketClientApp {
                   }
                   break;
               case "stt_latency":
+                  this.sttSamples.push(payload.value);
                   this.lastTurnSTTLatency = payload.value;
                   this.pendingSTTLatency = payload.value;
                   const userBubbles = this.chatWindow?.querySelectorAll(".chat-bubble.user");

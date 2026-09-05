@@ -754,6 +754,74 @@ input[type="password"]::placeholder {
   -webkit-text-fill-color: transparent;
 }
 
+/* Model Evaluation cards */
+.eval-section {
+  margin-bottom: 25px;
+}
+
+.eval-section > h5 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.eval-config-label {
+  font-size: 0.75rem;
+  font-weight: normal;
+  color: #aaa;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.eval-section .metrics-dashboard {
+  grid-template-columns: repeat(3, 1fr);
+  margin-bottom: 18px;
+}
+
+.metric-sub {
+  font-size: 0.7rem;
+  color: #888;
+  margin-top: 4px;
+}
+
+.per-turn-tokens-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.per-turn-tokens-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.per-turn-tokens-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(20, 20, 30, 0.95);
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #aaa;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.per-turn-tokens-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.per-turn-tokens-table tr:last-child td {
+  border-bottom: none;
+}
+
 /* Tool Editor */
 .tool-editor-container {
   margin-bottom: 25px;

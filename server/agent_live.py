@@ -858,6 +858,21 @@ async def run_agent_live(websocket: WebSocket, model: str, voice: Optional[str],
                 "type": "server-message",
                 "data": {"type": "trace_url", "url": trace_url}
             }))
+        # Label the Observability cards with the stack under evaluation.
+        await transport.output().push_frame(OutputTransportMessageFrame(message={
+            "label": "rtvi-ai",
+            "type": "server-message",
+            "data": {
+                'type': 'session_config',
+                'config': {
+                    'pipeline': 'gemini-live',
+                    'stt': 'native (S2S)',
+                    'llm': model,
+                    'tts': 'native (S2S)' if not tts else 'Gemini TTS',
+                    'voice': voice,
+                }
+            }
+        }))
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

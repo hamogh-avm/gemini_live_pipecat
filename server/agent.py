@@ -16,6 +16,7 @@ from pipecat.services.google.llm import GoogleLLMService
 from pipecat.services.google.vertex.llm import GoogleVertexLLMService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.smallest.tts import SmallestTTSService
+from pipecat.services.sarvam.tts import SarvamHttpTTSService
 
 from pipecat.services.stt_service import STTService
 from pipecat.services.google.stt import GoogleSTTService, language_to_google_stt_language
@@ -25,7 +26,7 @@ from pipecat.serializers.protobuf import ProtobufFrameSerializer
 from pipecat.frames.frames import (Frame, TranscriptionFrame, InterimTranscriptionFrame, TextFrame, InterruptionFrame, CancelFrame,
                                    StartFrame, TTSAudioRawFrame, TTSStoppedFrame, ErrorFrame, OutputTransportMessageFrame, LLMRunFrame,
                                    InputTransportMessageFrame, LLMContextFrame, AudioRawFrame, UserAudioRawFrame,
-                                   UserStartedSpeakingFrame, UserStoppedSpeakingFrame,
+                                   UserStartedSpeakingFrame, UserStoppedSpeakingFrame, LLMFullResponseEndFrame,
                                    VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
@@ -436,7 +437,38 @@ class CustomGoogleSTTService(GoogleSTTService):
             raise
 
 
-class CustomVertexGeminiTTSService(GeminiTTSService):
+class TTSMetricsBroadcastMixin:
+    """Broadcasts TTS time-to-first-byte to the observability panel.
+
+    Provider-agnostic, so Gemini, Google, Sarvam and Smallest are all timed the
+    same way - from the first text of a turn to the first audio byte back.
+    """
+
+    async def start_ttfb_metrics(self):
+        if not getattr(self, '_my_ttfb_start', None):
+            self._my_ttfb_start = time.time()
+        await super().start_ttfb_metrics()
+
+    async def stop_ttfb_metrics(self):
+        await super().stop_ttfb_metrics()
+        if getattr(self, '_my_ttfb_start', None):
+            latency = time.time() - self._my_ttfb_start
+            self._my_ttfb_start = None
+            if latency < 15.0:
+                # The "TTS Latency: <n>s" wording is what diagnostic_buffer's log
+                # parser keys on to feed the Latency Benchmarks tab - keep it.
+                logger.info(f"TTS Latency: {latency:.3f}s")
+                await self.push_frame(OutputTransportMessageFrame(message={
+                    "label": "rtvi-ai",
+                    "type": "server-message",
+                    "data": {
+                        'type': 'metrics',
+                        'payload': {'type': 'tts_latency', 'value': latency}
+                    }
+                }))
+
+
+class CustomVertexGeminiTTSService(TTSMetricsBroadcastMixin, GeminiTTSService):
     def __init__(self, *, project_id: str, location: str, voice_id: str = "Puck", model: str = "gemini-2.5-flash-lite-preview-tts", voice_prompt: Optional[str] = None, language_code: Optional[str] = None, **kwargs):
         # Pass a dummy API key since we're using Vertex.
         settings = GeminiTTSService.Settings(
@@ -449,27 +481,6 @@ class CustomVertexGeminiTTSService(GeminiTTSService):
         self._client = genai.Client(vertexai=True, project=project_id, location=location)
         self._voice_prompt = voice_prompt
         self._language_code = language_code
-
-    async def start_ttfb_metrics(self):
-        if not getattr(self, '_my_ttfb_start', None):
-            self._my_ttfb_start = time.time()
-        await super().start_ttfb_metrics()
-        
-    async def stop_ttfb_metrics(self):
-        await super().stop_ttfb_metrics()
-        if getattr(self, '_my_ttfb_start', None):
-            latency = time.time() - self._my_ttfb_start
-            self._my_ttfb_start = None
-            if latency < 15.0:
-                logger.info(f"TTS Latency: {latency:.3f}s")
-                await self.push_frame(OutputTransportMessageFrame(message={
-                    "label": "rtvi-ai",
-                    "type": "server-message",
-                    "data": {
-                        'type': 'metrics',
-                        'payload': {'type': 'tts_latency', 'value': latency}
-                    }
-                }))
 
     async def run_tts(self, text: str, context_id: str):
         logger.debug(f"{self}: Generating TTS [{text}]")
@@ -531,27 +542,9 @@ Pace: Conversational.
             yield ErrorFrame(error=f"Gemini TTS generation error: {str(e)}")
 
 
-class CustomGoogleTTSService(GoogleTTSService):
-    async def start_ttfb_metrics(self):
-        if not getattr(self, '_my_ttfb_start', None):
-            self._my_ttfb_start = time.time()
-        await super().start_ttfb_metrics()
-        
-    async def stop_ttfb_metrics(self):
-        await super().stop_ttfb_metrics()
-        if getattr(self, '_my_ttfb_start', None):
-            latency = time.time() - self._my_ttfb_start
-            self._my_ttfb_start = None
-            if latency < 15.0:
-                logger.info(f"TTS Latency: {latency:.3f}s")
-                await self.push_frame(OutputTransportMessageFrame(message={
-                    "label": "rtvi-ai",
-                    "type": "server-message",
-                    "data": {
-                        'type': 'metrics',
-                        'payload': {'type': 'tts_latency', 'value': latency}
-                    }
-                }))
+class CustomGoogleTTSService(TTSMetricsBroadcastMixin, GoogleTTSService):
+    pass
+
 
 class LLMMetricsBroadcastMixin:
     """Broadcasts LLM latency and token usage to the observability panel.
@@ -627,7 +620,12 @@ class CustomSmallestLLMService(LLMMetricsBroadcastMixin, OpenAILLMService):
     pass
 
 
-class CustomSmallestTTSService(SmallestTTSService):
+class CustomSarvamTTSService(TTSMetricsBroadcastMixin, SarvamHttpTTSService):
+    """Sarvam Bulbul TTS, timed like every other TTS provider."""
+    pass
+
+
+class CustomSmallestTTSService(TTSMetricsBroadcastMixin, SmallestTTSService):
     """Smallest Waves TTS pointed at the current streaming endpoint.
 
     pipecat 1.2.1 connects to /waves/v1/<model>/get_speech/stream, which Smallest has
@@ -671,6 +669,73 @@ class TranscriptionBroadcaster(FrameProcessor):
                             'text': ui_text
                         }
                     }))
+
+        await self.push_frame(frame, direction)
+
+
+class TurnMetricsProcessor(FrameProcessor):
+    """Emits turn and STT-latency metrics for the cascaded pipeline.
+
+    The Gemini Live path gets these from Gemini's own session messages
+    (`_handle_msg_turn_complete` and friends), which don't exist here, so
+    without this the Observability tab's Turns tile stays at zero for every
+    STT-LLM-TTS combination.
+
+    Turn boundary is `LLMFullResponseEndFrame` - exactly one per completion on
+    every LLM backend, which is the same thing Gemini Live calls a turn.
+
+    STT latency is measured the same way for every provider: from the user
+    finishing speaking to the transcript arriving. The Gemini Transcribe and
+    Cloud Speech services already publish their own (more provider-aware)
+    figure, so this only fills in for providers that publish nothing - Sarvam
+    and Smallest - and never double-counts a turn.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._turn_count = 0
+        self._user_stopped_at: Optional[float] = None
+        self._stt_reported_this_turn = False
+
+    async def _emit(self, payload: dict):
+        await self.push_frame(OutputTransportMessageFrame(message={
+            "label": "rtvi-ai",
+            "type": "server-message",
+            "data": {'type': 'metrics', 'payload': payload}
+        }))
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, (UserStoppedSpeakingFrame, VADUserStoppedSpeakingFrame)):
+            self._user_stopped_at = time.time()
+            self._stt_reported_this_turn = False
+
+        # Note when an STT service upstream has already published its own latency
+        # so we don't add a second sample for the same turn.
+        elif isinstance(frame, OutputTransportMessageFrame):
+            try:
+                payload = (frame.message or {}).get("data", {}).get("payload", {})
+                if payload.get("type") == "stt_latency":
+                    self._stt_reported_this_turn = True
+            except Exception:
+                pass
+
+        elif isinstance(frame, TranscriptionFrame):
+            if self._user_stopped_at and not self._stt_reported_this_turn:
+                elapsed = time.time() - self._user_stopped_at
+                self._user_stopped_at = None
+                if 0.03 <= elapsed <= 10.0:
+                    self._stt_reported_this_turn = True
+                    # Wording matters: diagnostic_buffer parses it for the
+                    # Latency Benchmarks tab.
+                    logger.info(f"STT Latency: {elapsed:.3f}s ({int(elapsed * 1000)}ms)")
+                    await self._emit({'type': 'stt_latency', 'value': elapsed})
+
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            self._turn_count += 1
+            logger.info(f"[TurnMetrics] Bot turn {self._turn_count} complete")
+            await self._emit({'type': 'turn_complete'})
 
         await self.push_frame(frame, direction)
 
@@ -919,10 +984,10 @@ async def run_agent(
         from pipecat.services.sarvam.tts import SarvamHttpTTSService
 
         sarvam_tts_session = aiohttp.ClientSession()
-        tts = SarvamHttpTTSService(
+        tts = CustomSarvamTTSService(
             api_key=sarvam_api_key,
             aiohttp_session=sarvam_tts_session,
-            settings=SarvamHttpTTSService.Settings(
+            settings=CustomSarvamTTSService.Settings(
                 model=clean_tts_model,
                 voice=tts_voice,
                 language=Language(tts_lang),
@@ -1016,6 +1081,7 @@ async def run_agent(
             start_trigger,
             accumulator,
             llm,
+            TurnMetricsProcessor(),
             TranscriptionBroadcaster(participant="Bot"),
             tts,
             context_aggregator.assistant(),
@@ -1040,6 +1106,7 @@ async def run_agent(
             TranscriptionBroadcaster(participant="User"),
             context_aggregator.user(),
             llm,
+            TurnMetricsProcessor(),
             TranscriptionBroadcaster(participant="Bot"),
             tts,
             context_aggregator.assistant(),
@@ -1061,6 +1128,22 @@ async def run_agent(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Pipecat Client connected to STT-LLM-TTS pipeline")
+        # Tell the Observability tab which stack these numbers belong to, so the
+        # per-model cards are labelled rather than just "current session".
+        await task.queue_frame(OutputTransportMessageFrame(message={
+            "label": "rtvi-ai",
+            "type": "server-message",
+            "data": {
+                'type': 'session_config',
+                'config': {
+                    'pipeline': 'stt-llm-tts',
+                    'stt': 'n/a (audio to LLM)' if skip_stt else clean_stt_model,
+                    'llm': clean_llm_model,
+                    'tts': clean_tts_model,
+                    'voice': tts_voice,
+                }
+            }
+        }))
         # Defer greeting until start_trigger message is received when user clicks Start Listening
 
     runner = PipelineRunner(handle_sigint=False)
