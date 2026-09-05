@@ -673,36 +673,33 @@ class TranscriptionBroadcaster(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-class TurnMetricsProcessor(FrameProcessor):
-    """Emits turn and STT-latency metrics for the cascaded pipeline.
-
-    The Gemini Live path gets these from Gemini's own session messages
-    (`_handle_msg_turn_complete` and friends), which don't exist here, so
-    without this the Observability tab's Turns tile stays at zero for every
-    STT-LLM-TTS combination.
-
-    Turn boundary is `LLMFullResponseEndFrame` - exactly one per completion on
-    every LLM backend, which is the same thing Gemini Live calls a turn.
-
-    STT latency is measured the same way for every provider: from the user
-    finishing speaking to the transcript arriving. The Gemini Transcribe and
-    Cloud Speech services already publish their own (more provider-aware)
-    figure, so this only fills in for providers that publish nothing - Sarvam
-    and Smallest - and never double-counts a turn.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._turn_count = 0
-        self._user_stopped_at: Optional[float] = None
-        self._stt_reported_this_turn = False
-
+class _MetricEmitterMixin:
     async def _emit(self, payload: dict):
         await self.push_frame(OutputTransportMessageFrame(message={
             "label": "rtvi-ai",
             "type": "server-message",
             "data": {'type': 'metrics', 'payload': payload}
         }))
+
+
+class STTLatencyProcessor(_MetricEmitterMixin, FrameProcessor):
+    """Times STT the same way for every provider, for the evaluation cards.
+
+    Measures from the user finishing speaking to the transcript arriving. The
+    Gemini Transcribe and Cloud Speech services already publish their own
+    (more provider-aware) figure, so this stands down when one has already been
+    seen for the turn and only fills in for providers that publish nothing -
+    Sarvam and Smallest.
+
+    Placement matters: this has to sit between the STT service and the user
+    context aggregator. The aggregator consumes TranscriptionFrame and does not
+    push it downstream, so anything after it never sees a transcript.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._user_stopped_at: Optional[float] = None
+        self._stt_reported_this_turn = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
         await super().process_frame(frame, direction)
@@ -711,7 +708,7 @@ class TurnMetricsProcessor(FrameProcessor):
             self._user_stopped_at = time.time()
             self._stt_reported_this_turn = False
 
-        # Note when an STT service upstream has already published its own latency
+        # Note when the STT service upstream already published its own latency
         # so we don't add a second sample for the same turn.
         elif isinstance(frame, OutputTransportMessageFrame):
             try:
@@ -732,7 +729,30 @@ class TurnMetricsProcessor(FrameProcessor):
                     logger.info(f"STT Latency: {elapsed:.3f}s ({int(elapsed * 1000)}ms)")
                     await self._emit({'type': 'stt_latency', 'value': elapsed})
 
-        elif isinstance(frame, LLMFullResponseEndFrame):
+        await self.push_frame(frame, direction)
+
+
+class TurnMetricsProcessor(_MetricEmitterMixin, FrameProcessor):
+    """Counts bot turns for the cascaded pipeline.
+
+    The Gemini Live path gets this from Gemini's own session message
+    (`_handle_msg_turn_complete`), which doesn't exist here, so without this the
+    Observability tab's Turns tile stays at zero for every STT-LLM-TTS
+    combination.
+
+    Turn boundary is `LLMFullResponseEndFrame` - exactly one per completion on
+    every LLM backend, which is the same thing Gemini Live calls a turn. Must sit
+    downstream of the LLM service that emits it.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._turn_count = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, LLMFullResponseEndFrame):
             self._turn_count += 1
             logger.info(f"[TurnMetrics] Bot turn {self._turn_count} complete")
             await self._emit({'type': 'turn_complete'})
@@ -1103,6 +1123,8 @@ async def run_agent(
             start_trigger,
             vad_processor,
             stt,
+            # Must precede context_aggregator.user(): it swallows TranscriptionFrame.
+            STTLatencyProcessor(),
             TranscriptionBroadcaster(participant="User"),
             context_aggregator.user(),
             llm,
