@@ -580,8 +580,14 @@ class LLMMetricsBroadcastMixin:
         completion_tokens = getattr(metrics, "completion_tokens", 0) or 0
         total_tokens = getattr(metrics, "total_tokens", 0) or (prompt_tokens + completion_tokens)
         
-        logger.info(f"LLM Token Usage: Prompt: {prompt_tokens}, Response: {completion_tokens}, Total: {total_tokens}")
-        
+        # One usage report per LLM completion, which is the same boundary
+        # TurnMetricsProcessor counts (LLMFullResponseEndFrame), so the two stay
+        # in step. Stamped here so the client never has to infer it from the
+        # arrival order of the two messages.
+        self._usage_turn_index = getattr(self, '_usage_turn_index', 0) + 1
+
+        logger.info(f"LLM Token Usage: Turn {self._usage_turn_index}, Prompt: {prompt_tokens}, Response: {completion_tokens}, Total: {total_tokens}")
+
         await self.push_frame(OutputTransportMessageFrame(message={
             "label": "rtvi-ai",
             "type": "server-message",
@@ -589,6 +595,7 @@ class LLMMetricsBroadcastMixin:
                 'type': 'metrics',
                 'payload': {
                     'type': 'usage',
+                    'turn': self._usage_turn_index,
                     'usage': {
                         "prompt_token_count": prompt_tokens,
                         "response_token_count": completion_tokens,
@@ -755,7 +762,7 @@ class TurnMetricsProcessor(_MetricEmitterMixin, FrameProcessor):
         if isinstance(frame, LLMFullResponseEndFrame):
             self._turn_count += 1
             logger.info(f"[TurnMetrics] Bot turn {self._turn_count} complete")
-            await self._emit({'type': 'turn_complete'})
+            await self._emit({'type': 'turn_complete', 'turn': self._turn_count})
 
         await self.push_frame(frame, direction)
 

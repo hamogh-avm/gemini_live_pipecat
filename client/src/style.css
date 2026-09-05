@@ -822,6 +822,13 @@ input[type="password"]::placeholder {
   border-bottom: none;
 }
 
+/* Turns 3+ collapse the prompt/response split into a single combined total. */
+.per-turn-combined {
+  opacity: 0.45;
+  font-style: italic;
+  font-size: 0.75rem;
+}
+
 /* Tool Editor */
 .tool-editor-container {
   margin-bottom: 25px;

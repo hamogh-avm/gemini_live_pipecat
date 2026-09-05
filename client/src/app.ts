@@ -669,10 +669,14 @@ class WebsocketClientApp {
           if (!this.perTurnTokens.length) {
               body.innerHTML = `<tr><td colspan="4" style="opacity:0.6;padding:8px;">No turns recorded yet</td></tr>`;
           } else {
+              // Turns 1 and 2 are the ones worth comparing across models - they
+              // carry the system prompt and the first real exchange. From turn 3
+              // the split stops being interesting, so show the combined figure.
               body.innerHTML = this.perTurnTokens
-                  .map(
-                      (t) =>
-                          `<tr><td>Turn ${t.turn}</td><td>${t.prompt.toLocaleString()}</td><td>${t.completion.toLocaleString()}</td><td><strong>${t.total.toLocaleString()}</strong></td></tr>`
+                  .map((t) =>
+                      t.turn <= 2
+                          ? `<tr><td>Turn ${t.turn}</td><td>${t.prompt.toLocaleString()}</td><td>${t.completion.toLocaleString()}</td><td><strong>${t.total.toLocaleString()}</strong></td></tr>`
+                          : `<tr><td>Turn ${t.turn}</td><td colspan="2" class="per-turn-combined">combined</td><td><strong>${t.total.toLocaleString()}</strong></td></tr>`
                   )
                   .join("");
           }
@@ -939,15 +943,29 @@ class WebsocketClientApp {
                       if (payload.usage.total_token_count) {
                           this.tokenCount += payload.usage.total_token_count;
                       }
-                      // Attribute this usage report to the turn it belongs to.
-                      // Turn N's report arrives before turn N's turn_complete, so
-                      // the in-flight turn is turnCount + 1.
-                      this.perTurnTokens.push({
-                          turn: this.turnCount + 1,
+                      // The server stamps the turn this report belongs to. The two
+                      // pipelines order these messages differently (Gemini Live
+                      // sends turn_complete first, the cascaded stack sends usage
+                      // first), so inferring it from turnCount here dropped turn 1
+                      // on Gemini Live. Fall back only for older servers.
+                      const turn = typeof payload.turn === "number" ? payload.turn : this.turnCount + 1;
+                      const entry = {
+                          turn,
                           prompt: payload.usage.prompt_token_count || 0,
                           completion: payload.usage.response_token_count || payload.usage.completion_token_count || 0,
                           total: payload.usage.total_token_count || 0,
-                      });
+                      };
+                      // A turn with a tool call reports usage more than once; show
+                      // the turn's totals rather than two rows with the same number.
+                      const existing = this.perTurnTokens.find((t) => t.turn === turn);
+                      if (existing) {
+                          existing.prompt += entry.prompt;
+                          existing.completion += entry.completion;
+                          existing.total += entry.total;
+                      } else {
+                          this.perTurnTokens.push(entry);
+                          this.perTurnTokens.sort((a, b) => a.turn - b.turn);
+                      }
                       if (lastChild && lastChild.classList.contains("bot")) {
                           this.updateBubbleLatencyDisplay(lastChild, { usage: payload.usage });
                       } else {

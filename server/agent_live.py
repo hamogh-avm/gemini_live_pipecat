@@ -358,18 +358,6 @@ class GeminiSessionLoggerMixin:
                 "data": message_data
             }))
 
-    async def _handle_msg_turn_complete(self, message):
-        await super()._handle_msg_turn_complete(message)
-        if getattr(self, '_bot_turn_text_buffer', '').strip():
-            full_bot_text = self._bot_turn_text_buffer.strip()
-            append_diagnostic_log("🤖 Bot Response", f'"{full_bot_text}"')
-            GLOBAL_LANGSMITH_TRACER.record_bot_turn(
-                full_bot_text,
-                ttfb_ms=getattr(self, '_current_turn_ttft', 0.0) * 1000.0 if getattr(self, '_current_turn_ttft', None) else None,
-                token_usage=getattr(self, '_last_turn_usage', None)
-            )
-            self._bot_turn_text_buffer = ""
-
     async def _send_repeat_instruction(self, filler_text: str):
         """Send a user-role prompt telling the model to repeat itself."""
         if self._disconnecting or not self._session:
@@ -446,6 +434,11 @@ class GeminiSessionLoggerMixin:
                 'type': 'metrics',
                 'payload': {
                     'type': 'usage',
+                    # Stamped server-side: Gemini dispatches turn_complete *before*
+                    # usage_metadata for the same message, so a client counting
+                    # turn_complete events would misattribute every report to the
+                    # next turn and never record turn 1.
+                    'turn': getattr(self, '_metric_turn_index', 0),
                     'usage': usage_dict
                 }
             }
@@ -453,14 +446,29 @@ class GeminiSessionLoggerMixin:
 
     async def _handle_msg_turn_complete(self, message):
         await super()._handle_msg_turn_complete(message)
-        
+
+        # Diagnostics + LangSmith. This used to live in a second, identically
+        # named definition further up the class body, which Python silently
+        # discarded in favour of this one - so bot turns reached neither sink.
+        if getattr(self, '_bot_turn_text_buffer', '').strip():
+            full_bot_text = self._bot_turn_text_buffer.strip()
+            append_diagnostic_log("🤖 Bot Response", f'"{full_bot_text}"')
+            GLOBAL_LANGSMITH_TRACER.record_bot_turn(
+                full_bot_text,
+                ttfb_ms=getattr(self, '_current_turn_ttft', 0.0) * 1000.0 if getattr(self, '_current_turn_ttft', None) else None,
+                token_usage=getattr(self, '_last_turn_usage', None)
+            )
+            self._bot_turn_text_buffer = ""
+
+        self._metric_turn_index = getattr(self, '_metric_turn_index', 0) + 1
+
         # Metric Streaming: Turn Complete
         await self.push_frame(OutputTransportMessageFrame(message={
             "label": "rtvi-ai",
             "type": "server-message",
             "data": {
                 'type': 'metrics',
-                'payload': {'type': 'turn_complete'}
+                'payload': {'type': 'turn_complete', 'turn': self._metric_turn_index}
             }
         }))
 
