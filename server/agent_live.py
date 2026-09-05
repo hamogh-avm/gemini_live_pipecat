@@ -102,9 +102,36 @@ class GeminiSessionLoggerMixin:
         self._my_ttfb_start = time.time()
         await super().start_ttfb_metrics()
         
+    async def _emit_turn_complete_metric(self, interrupted: bool = False):
+        """Count one bot turn and tell the client about it.
+
+        Called from two places: Gemini's own turn_complete message, and a
+        barge-in. An interrupted turn produced real bot output and consumed real
+        tokens, so it counts - but Gemini sends no turn_complete for it, which
+        is why interruptions used to leave the Turns tile untouched.
+        """
+        self._metric_turn_index = getattr(self, '_metric_turn_index', 0) + 1
+        self._bot_turn_started = False
+
+        payload: Dict[str, Any] = {
+            'type': 'turn_complete',
+            'turn': self._metric_turn_index,
+        }
+        if interrupted:
+            payload['interrupted'] = True
+
+        await self.push_frame(OutputTransportMessageFrame(message={
+            "label": "rtvi-ai",
+            "type": "server-message",
+            "data": {'type': 'metrics', 'payload': payload}
+        }))
+
     async def stop_ttfb_metrics(self):
         await super().stop_ttfb_metrics()
         if hasattr(self, '_my_ttfb_start') and self._my_ttfb_start:
+            # First bot output of this turn - the turn is now real enough to
+            # count if the user barges in before Gemini closes it.
+            self._bot_turn_started = True
             self._current_turn_ttft = time.time() - self._my_ttfb_start
             logger.info(f"Custom TTFT calculation: {self._current_turn_ttft}s")
             ttfb_ms = self._current_turn_ttft * 1000.0
@@ -243,6 +270,13 @@ class GeminiSessionLoggerMixin:
                     'payload': metric_payload
                 }
             }))
+
+            # The bot spoke, so this counts as a turn even though the user cut
+            # it short. Gemini sends no turn_complete for an aborted turn; if it
+            # ever does, the flag below stops us counting the same turn twice.
+            if getattr(self, '_bot_turn_started', False):
+                await self._emit_turn_complete_metric(interrupted=True)
+                self._turn_counted_on_interrupt = True
 
         await super().process_frame(frame, direction)
 
@@ -460,17 +494,15 @@ class GeminiSessionLoggerMixin:
             )
             self._bot_turn_text_buffer = ""
 
-        self._metric_turn_index = getattr(self, '_metric_turn_index', 0) + 1
+        # A barge-in already counted this turn, so close it out without
+        # counting it again. Guards the case where Gemini does send a trailing
+        # turn_complete for a turn the user interrupted.
+        if getattr(self, '_turn_counted_on_interrupt', False):
+            self._turn_counted_on_interrupt = False
+            self._bot_turn_started = False
+            return
 
-        # Metric Streaming: Turn Complete
-        await self.push_frame(OutputTransportMessageFrame(message={
-            "label": "rtvi-ai",
-            "type": "server-message",
-            "data": {
-                'type': 'metrics',
-                'payload': {'type': 'turn_complete', 'turn': self._metric_turn_index}
-            }
-        }))
+        await self._emit_turn_complete_metric()
 
     async def _handle_msg_tool_call(self, message):
         # Metric Streaming: Tool Call

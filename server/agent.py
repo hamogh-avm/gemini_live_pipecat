@@ -27,6 +27,7 @@ from pipecat.frames.frames import (Frame, TranscriptionFrame, InterimTranscripti
                                    StartFrame, TTSAudioRawFrame, TTSStoppedFrame, ErrorFrame, OutputTransportMessageFrame, LLMRunFrame,
                                    InputTransportMessageFrame, LLMContextFrame, AudioRawFrame, UserAudioRawFrame,
                                    UserStartedSpeakingFrame, UserStoppedSpeakingFrame, LLMFullResponseEndFrame,
+                                   LLMFullResponseStartFrame,
                                    VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
@@ -740,29 +741,56 @@ class STTLatencyProcessor(_MetricEmitterMixin, FrameProcessor):
 
 
 class TurnMetricsProcessor(_MetricEmitterMixin, FrameProcessor):
-    """Counts bot turns for the cascaded pipeline.
+    """Counts bot turns and interruptions for the cascaded pipeline.
 
-    The Gemini Live path gets this from Gemini's own session message
-    (`_handle_msg_turn_complete`), which doesn't exist here, so without this the
-    Observability tab's Turns tile stays at zero for every STT-LLM-TTS
-    combination.
+    The Gemini Live path gets both from Gemini's own session messages, which
+    don't exist here, so without this the Observability tab's Turns and
+    Interrupts tiles stay at zero for every STT-LLM-TTS combination.
 
     Turn boundary is `LLMFullResponseEndFrame` - exactly one per completion on
     every LLM backend, which is the same thing Gemini Live calls a turn. Must sit
     downstream of the LLM service that emits it.
+
+    A barge-in while the LLM is still generating also closes a turn: the bot
+    spoke and tokens were spent, so it counts. Whether the aborted completion
+    still emits its end frame is backend-dependent, hence the suppression flag.
     """
 
     def __init__(self):
         super().__init__()
         self._turn_count = 0
+        self._response_in_flight = False
+        self._counted_on_interrupt = False
+
+    async def _count_turn(self, interrupted: bool = False):
+        self._turn_count += 1
+        self._response_in_flight = False
+        suffix = " (interrupted)" if interrupted else ""
+        logger.info(f"[TurnMetrics] Bot turn {self._turn_count} complete{suffix}")
+        payload = {'type': 'turn_complete', 'turn': self._turn_count}
+        if interrupted:
+            payload['interrupted'] = True
+        await self._emit(payload)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, LLMFullResponseEndFrame):
-            self._turn_count += 1
-            logger.info(f"[TurnMetrics] Bot turn {self._turn_count} complete")
-            await self._emit({'type': 'turn_complete', 'turn': self._turn_count})
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._response_in_flight = True
+
+        elif isinstance(frame, InterruptionFrame):
+            await self._emit({'type': 'interruption', 'count': 1})
+            if self._response_in_flight:
+                await self._count_turn(interrupted=True)
+                self._counted_on_interrupt = True
+
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            if self._counted_on_interrupt:
+                # Already counted when the user barged in.
+                self._counted_on_interrupt = False
+                self._response_in_flight = False
+            else:
+                await self._count_turn()
 
         await self.push_frame(frame, direction)
 
