@@ -374,6 +374,42 @@
 
               </div>
 
+              <!-- Model Evaluation: average per-stage latency for this session -->
+              <div class="eval-section">
+                <h5>Model Evaluation <span id="eval-config-label" class="eval-config-label">Connect to start measuring</span></h5>
+                <div class="metrics-dashboard">
+                  <div class="metric-card">
+                    <div class="metric-title">Avg STT Latency</div>
+                    <div class="metric-value" id="metric-avg-stt">—</div>
+                    <div class="metric-sub" id="metric-avg-stt-sub">no data</div>
+                  </div>
+                  <div class="metric-card">
+                    <div class="metric-title">Avg LLM Latency</div>
+                    <div class="metric-value" id="metric-avg-llm">—</div>
+                    <div class="metric-sub" id="metric-avg-llm-sub">no data</div>
+                  </div>
+                  <div class="metric-card">
+                    <div class="metric-title">Avg TTS Latency</div>
+                    <div class="metric-value" id="metric-avg-tts">—</div>
+                    <div class="metric-sub" id="metric-avg-tts-sub">no data</div>
+                  </div>
+                </div>
+
+                <div class="per-turn-tokens">
+                  <h5>Tokens per Turn</h5>
+                  <div class="per-turn-tokens-scroll">
+                    <table class="per-turn-tokens-table">
+                      <thead>
+                        <tr><th>Turn</th><th>Prompt</th><th>Response</th><th>Total</th></tr>
+                      </thead>
+                      <tbody id="per-turn-tokens-body">
+                        <tr><td colspan="4" style="opacity:0.6;padding:8px;">No turns recorded yet</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
 
               <!-- Chat Window -->
               <div class="chat-window-container">
