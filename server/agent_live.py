@@ -11,6 +11,19 @@ from datetime import datetime
 import time
 
 from rag_function import search_knowledge_base_schema, search_knowledge_base_handler
+from kb_search import kb_search_schema, kb_search_handler
+
+
+def resolve_kb_tool():
+    """Pick the knowledge-base backend.
+
+    Vertex RAG when a corpus is configured, otherwise the local markdown KB.
+    Both register under the name `search_knowledge_base`, so the model only
+    ever sees one KB tool.
+    """
+    if os.getenv("RAG_CORPUS_RESOURCE_ID"):
+        return search_knowledge_base_schema, search_knowledge_base_handler
+    return kb_search_schema, kb_search_handler
 from diagnostic_buffer import append_diagnostic_log
 from tracing import GLOBAL_LANGSMITH_TRACER
 
@@ -693,6 +706,7 @@ async def run_agent_live(websocket: WebSocket, model: str, voice: Optional[str],
     )
 
     # Dynamic Tool & RAG / Memory Registration
+    kb_schema, kb_handler = resolve_kb_tool()
     standard_tools = [
         FunctionSchema(
             name="get_current_time",
@@ -709,7 +723,7 @@ async def run_agent_live(websocket: WebSocket, model: str, voice: Optional[str],
             },
             required=["is_explicit_request"]
         ),
-        search_knowledge_base_schema,
+        kb_schema,
     ]
 
     if tools:
@@ -835,7 +849,7 @@ async def run_agent_live(websocket: WebSocket, model: str, voice: Optional[str],
         llm = CustomGeminiLiveVertexLLMService(**vertex_params)
 
     llm.register_function("get_current_time", get_current_time)
-    llm.register_function("search_knowledge_base", search_knowledge_base_handler)
+    llm.register_function("search_knowledge_base", kb_handler)
     
     # Register generic handler for dynamic tools (skip built-in tools)
     built_in_tools = {"get_current_time", "search_knowledge_base"}
