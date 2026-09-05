@@ -10,6 +10,8 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from kb_search import kb_search_schema, kb_search_handler
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair, LLMUserAggregatorParams
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.services.google.llm import GoogleLLMService
@@ -1004,6 +1006,8 @@ async def run_agent(
             )
         )
 
+    llm.register_function("search_knowledge_base", kb_search_handler)
+
     sarvam_tts_session: Optional[aiohttp.ClientSession] = None
     if clean_tts_model.startswith("gemini"):
         # Use Gemini TTS (Vertex AI) requires 24kHz
@@ -1143,10 +1147,16 @@ async def run_agent(
             transport.output()
         ]
     else:
-        context = LLMContext(messages=[
-            {"role": "system", "content": final_system_instruction},
-            {"role": "user", "content": initial_greeting}
-        ])
+        # The knowledge base is given to the cascaded stack too, so a Sarvam or
+        # Smallest run answers from the same facts as Gemini Live rather than
+        # from whatever the model happens to know about lending.
+        context = LLMContext(
+            messages=[
+                {"role": "system", "content": final_system_instruction},
+                {"role": "user", "content": initial_greeting}
+            ],
+            tools=ToolsSchema(standard_tools=[kb_search_schema]),
+        )
         user_params = LLMUserAggregatorParams(
             vad_analyzer=vad_analyzer,
         )
